@@ -53,11 +53,17 @@ object SbtPlayWebpack extends AutoPlugin {
     config := baseDirectory.value / "webpack.config.js",
     displayOptions := JsObject("colors" -> JsBoolean(true)),
 
-    envVars := LocalEngine.nodePathEnv((WebKeys.nodeModuleDirectories in Plugin).value.map(_.getCanonicalPath).to[immutable.Seq]),
+    envVars := LocalEngine.nodePathEnv(
+      (WebKeys.nodeModuleDirectories in Plugin).value.map(_.getCanonicalPath).to[immutable.Seq]
+    ),
     envVars in run := envVars.value + ("NODE_ENV" -> "development"),
     envVars in webpack := envVars.value + ("NODE_ENV" -> "production"),
 
-    webpack <<= runWebpackTask dependsOn (WebKeys.nodeModules in Plugin, WebKeys.nodeModules in Assets, WebKeys.webModules in Assets),
+    webpack <<= runWebpackTask dependsOn (
+      WebKeys.nodeModules in Plugin,
+      WebKeys.nodeModules in Assets,
+      WebKeys.webModules in Assets
+    ),
 
     WebKeys.pipeline <<= WebKeys.pipeline dependsOn webpack,
     stage in Universal <<= (stage in Universal) dependsOn webpack,
@@ -145,19 +151,19 @@ object SbtPlayWebpack extends AutoPlugin {
 
   private def runNode(base: File, script: String, args: List[String], env: Map[String, String], log: Logger): Process = {
     def nodeInstalled: Boolean = try {
-      runProcess(List("node", "-v"), base, env, None)
+      fork(List("node", "-v"), base, env, None)
       true
     } catch {
       case _: IOException => false
     }
     if (nodeInstalled)
-      runProcess("node" :: script :: args, base, env, Some(log))
+      fork("node" :: script :: args, base, env, Some(log))
     else
       throw NodeMissingException
   }
 
-  private def runProcess(command: List[String], base: File, env: Map[String, String], log: Option[Logger]): Process = {
-    val processIO = log.map { log =>
+  private def fork(command: List[String], base: File, env: Map[String, String], log: Option[Logger]): Process = {
+    val io = log.map { log =>
       new ProcessIO(
         writeInput = BasicIO.close,
         processOutput = BasicIO.processFully(s => log.info(s)),
@@ -168,9 +174,9 @@ object SbtPlayWebpack extends AutoPlugin {
       new ProcessIO(BasicIO.close, BasicIO.close, BasicIO.close, _ => false)
     }
     if (IS_OS_WINDOWS)
-      Process("cmd" :: "/c" :: command, base, env.toSeq: _*).run(processIO)
+      Process("cmd" :: "/c" :: command, base, env.toSeq: _*).run(io)
     else
-      Process(command, base, env.toSeq: _*).run(processIO)
+      Process(command, base, env.toSeq: _*).run(io)
   }
 
   object WebpackWatcher {
