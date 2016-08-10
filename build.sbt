@@ -11,6 +11,8 @@ resolvers ++= Seq(
   Resolver.jcenterRepo
 )
 
+dependencyOverrides += "org.webjars" % "npm" % "3.9.3"
+
 libraryDependencies += "org.webjars.npm" % "lodash" % "4.14.1"
 
 addSbtPlugin("com.typesafe.play" % "sbt-plugin" % sys.props.getOrElse("play.version", "2.5.4"))
