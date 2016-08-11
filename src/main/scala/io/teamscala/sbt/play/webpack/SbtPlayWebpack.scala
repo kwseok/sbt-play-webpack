@@ -12,6 +12,7 @@ import org.apache.commons.lang3.SystemUtils.IS_OS_WINDOWS
 import play.runsupport.{FileWatchService, FileWatcher}
 import play.sbt.PlayImport.PlayKeys.playRunHooks
 import play.sbt.{Play, PlayRunHook}
+import sbt.Defaults.doClean
 import sbt._
 import sbt.Keys._
 import spray.json.{JsonParser, DefaultJsonProtocol, JsObject, JsValue, JsBoolean}
@@ -29,8 +30,8 @@ object SbtPlayWebpack extends AutoPlugin {
 
     object PlayWebpackKeys {
       val config   = SettingKey[File]("webpackConfig", "The location of a webpack configuration file.")
-      val contexts = TaskKey[Seq[File]]("webpackContexts", "The locations of a webpack contexts.")
       val envVars  = SettingKey[Map[String, String]]("webpackEnvVars", "Environment variable names and values to set for webpack.")
+      val contexts = TaskKey[Seq[File]]("webpackContexts", "The locations of a webpack contexts.")
     }
   }
 
@@ -45,7 +46,6 @@ object SbtPlayWebpack extends AutoPlugin {
     excludeFilter in webpack := HiddenFileFilter,
 
     config := baseDirectory.value / "webpack.config.js",
-    contexts <<= resolveContexts,
 
     envVars := LocalEngine.nodePathEnv(
       (WebKeys.nodeModuleDirectories in Plugin).value.map(_.getCanonicalPath).to[immutable.Seq]
@@ -54,8 +54,12 @@ object SbtPlayWebpack extends AutoPlugin {
     envVars in Assets := envVars.value + ("NODE_ENV" -> "production"),
     envVars in TestAssets := envVars.value + ("NODE_ENV" -> "testing"),
 
-    webpack in Assets <<= runWebpackTask(Assets) dependsOn (WebKeys.nodeModules in Plugin, WebKeys.nodeModules in Assets, WebKeys.webModules in Assets),
-    webpack in TestAssets <<= runWebpackTask(TestAssets) dependsOn (WebKeys.nodeModules in Plugin, WebKeys.nodeModules in Assets, WebKeys.webModules in Assets),
+    contexts in Assets <<= resolveContexts(Assets),
+    contexts in TestAssets <<= resolveContexts(TestAssets),
+    contexts <<= contexts in Assets,
+
+    webpack in Assets <<= runWebpack(Assets) dependsOn (WebKeys.nodeModules in Plugin, WebKeys.nodeModules in Assets, WebKeys.webModules in Assets),
+    webpack in TestAssets <<= runWebpack(TestAssets) dependsOn (WebKeys.nodeModules in Plugin, WebKeys.nodeModules in Assets, WebKeys.webModules in Assets),
     webpack <<= webpack in Assets,
 
     WebKeys.pipeline <<= WebKeys.pipeline dependsOn (webpack in Assets),
@@ -84,7 +88,7 @@ object SbtPlayWebpack extends AutoPlugin {
     )
   }
 
-  private def resolveContexts: Def.Initialize[Task[Seq[File]]] = Def.task {
+  private def resolveContexts(config: Configuration): Def.Initialize[Task[Seq[File]]] = Def.task {
     val resolveContextsScript = SbtWeb.copyResourceTo(
       (target in Plugin).value / webpack.key.label,
       getClass.getClassLoader.getResource("resolve-contexts.js"),
@@ -93,8 +97,8 @@ object SbtPlayWebpack extends AutoPlugin {
     val results = runNode(
       baseDirectory.value,
       resolveContextsScript,
-      args = List(config.value.absolutePath),
-      env = Map.empty,
+      args = List(PlayWebpackKeys.config.value.absolutePath),
+      env = (envVars in config).value,
       log = state.value.log
     )
     import DefaultJsonProtocol._
@@ -114,10 +118,11 @@ object SbtPlayWebpack extends AutoPlugin {
     }
   }
 
-  private def runWebpackTask(config: Configuration): Def.Initialize[Task[Unit]] = Def.task {
+  private def runWebpack(config: Configuration): Def.Initialize[Task[Unit]] = Def.task {
     val configFile = PlayWebpackKeys.config.value
 
-    val runUpdate = cached(streams.value.cacheDirectory / webpack.key.label, FilesInfo.hash) { _ =>
+    val cacheDir = streams.value.cacheDirectory / "run" / config.name
+    val runUpdate = cached(cacheDir, FilesInfo.hash) { _ =>
       state.value.log.info(s"Webpack running by ${relativizedPath(baseDirectory.value, configFile)}")
 
       runNode(
@@ -130,11 +135,13 @@ object SbtPlayWebpack extends AutoPlugin {
         env = (envVars in config).value,
         log = state.value.log
       )
+
+      doClean(cacheDir.getParentFile.*(DirectoryFilter).get, Seq(cacheDir))
     }
 
     val include = (includeFilter in webpack in config).value
     val exclude = (excludeFilter in webpack in config).value
-    val inputFiles = contexts.value.flatMap(_.**(include && -exclude).get).filterNot(_.isDirectory)
+    val inputFiles = (contexts in config).value.flatMap(_.**(include && -exclude).get).filterNot(_.isDirectory)
 
     runUpdate((configFile +: inputFiles).toSet)
   }
