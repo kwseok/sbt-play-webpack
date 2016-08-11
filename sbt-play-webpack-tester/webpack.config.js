@@ -1,14 +1,18 @@
 const path = require('path');
-const srcDir = path.join(__dirname, '/app/assets');
-const outDir = path.join(__dirname, '/target/web/webpack');
+const WebpackCleanupPlugin = require('webpack-cleanup-plugin');
 
 console.log('NODE_ENV  : ', process.env.NODE_ENV);
 console.log('NODE_PATH : ', process.env.NODE_PATH);
 
 module.exports = {
-  entry: path.join(srcDir, 'javascripts/entry.js'),
-  output: {
-    path: outDir,
-    filename: 'javascripts/bundle.js'
-  }
+    context: path.join(__dirname, '/assets'),
+    entry: './javascripts/entry.js',
+    output: {
+        path: path.join(__dirname, '/public/bundles'),
+        publicPath: '/assets/bundles/',
+        filename: 'javascripts/bundle.js'
+    },
+    plugins: [
+        new WebpackCleanupPlugin()
+    ]
 };

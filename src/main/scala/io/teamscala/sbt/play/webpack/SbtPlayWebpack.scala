@@ -14,9 +14,9 @@ import play.sbt.PlayImport.PlayKeys.playRunHooks
 import play.sbt.{Play, PlayRunHook}
 import sbt._
 import sbt.Keys._
-import spray.json.{JsString, JsBoolean, JsObject}
+import spray.json.{JsonParser, DefaultJsonProtocol, JsObject, JsValue, JsBoolean}
 
-import scala.collection.immutable
+import scala.collection.{mutable, immutable}
 
 object SbtPlayWebpack extends AutoPlugin {
 
@@ -25,64 +25,55 @@ object SbtPlayWebpack extends AutoPlugin {
   override def trigger = AllRequirements
 
   object autoImport {
-    val webpack = TaskKey[Seq[File]]("webpack", "Run the webpack module bundler.")
+    val webpack = TaskKey[Unit]("webpack", "Run the webpack module bundler.")
 
     object PlayWebpackKeys {
-      val script         = TaskKey[File]("webpackScript", "The location of a webpack script file.")
-      val config         = SettingKey[File]("webpackConfig", "The location of a webpack configuration file.")
-      val envVars        = SettingKey[Map[String, String]]("webpackEnvVars", "Environment variable names and values to set for webpack.")
-      val displayOptions = SettingKey[JsObject]("webpackDisplayOptions", "Display options for statistics.")
+      val config   = SettingKey[File]("webpackConfig", "The location of a webpack configuration file.")
+      val contexts = TaskKey[Seq[File]]("webpackContexts", "The locations of a webpack contexts.")
+      val envVars  = SettingKey[Map[String, String]]("webpackEnvVars", "Environment variable names and values to set for webpack.")
     }
   }
 
   import autoImport._
   import autoImport.PlayWebpackKeys._
 
-  case object NodeMissingException extends RuntimeException("'node' is required. Please install it and add it to your PATH.")
-  case object WebpackFailureException extends RuntimeException("Webpack failed to running.")
+  case class NodeMissingException(cause: Throwable) extends RuntimeException("'node' is required. Please install it and add it to your PATH.", cause)
+  case class NodeExecuteFailureException(exitValue: Int) extends RuntimeException("Failed to execute node.")
 
   override def projectSettings: Seq[Setting[_]] = Seq(
     includeFilter in webpack := AllPassFilter,
     excludeFilter in webpack := HiddenFileFilter,
-    sourceDirectory in webpack := (sourceDirectory in Assets).value,
-    resourceManaged in webpack := WebKeys.webTarget.value / webpack.key.label,
-    resourceGenerators in Assets <+= Def.task((resourceManaged in webpack).value.***.get.filter(_.isFile)),
-    managedResourceDirectories in Assets += (resourceManaged in webpack).value,
 
-    script <<= getWebpackScript,
     config := baseDirectory.value / "webpack.config.js",
-    displayOptions := JsObject("colors" -> JsBoolean(true)),
+    contexts <<= resolveContexts,
 
     envVars := LocalEngine.nodePathEnv(
       (WebKeys.nodeModuleDirectories in Plugin).value.map(_.getCanonicalPath).to[immutable.Seq]
     ),
     envVars in run := envVars.value + ("NODE_ENV" -> "development"),
-    envVars in webpack := envVars.value + ("NODE_ENV" -> "production"),
+    envVars in Assets := envVars.value + ("NODE_ENV" -> "production"),
+    envVars in TestAssets := envVars.value + ("NODE_ENV" -> "testing"),
 
-    webpack <<= runWebpackTask dependsOn (
-      WebKeys.nodeModules in Plugin,
-      WebKeys.nodeModules in Assets,
-      WebKeys.webModules in Assets
-    ),
+    webpack in Assets <<= runWebpackTask(Assets) dependsOn (WebKeys.nodeModules in Plugin, WebKeys.nodeModules in Assets, WebKeys.webModules in Assets),
+    webpack in TestAssets <<= runWebpackTask(TestAssets) dependsOn (WebKeys.nodeModules in Plugin, WebKeys.nodeModules in Assets, WebKeys.webModules in Assets),
+    webpack <<= webpack in Assets,
 
-    WebKeys.pipeline <<= WebKeys.pipeline dependsOn webpack,
-    stage in Universal <<= (stage in Universal) dependsOn webpack,
-    stage in Docker <<= (stage in Docker) dependsOn webpack,
-    dist in Universal <<= (dist in Universal) dependsOn webpack,
-    test in Test <<= (test in Test) dependsOn webpack,
-    test in TestAssets <<= (test in TestAssets) dependsOn webpack,
+    WebKeys.pipeline <<= WebKeys.pipeline dependsOn (webpack in Assets),
+    stage in Universal <<= (stage in Universal) dependsOn (webpack in Assets),
+    stage in Docker <<= (stage in Docker) dependsOn (webpack in Assets),
+    dist in Universal <<= (dist in Universal) dependsOn (webpack in Assets),
+    test in Test <<= (test in Test) dependsOn (webpack in TestAssets),
+    test in TestAssets <<= (test in TestAssets) dependsOn (webpack in TestAssets),
 
     playRunHooks += WebpackWatcher(
       baseDirectory.value,
-      script.value,
+      getWebpackScript.value,
       config.value,
-      (sourceDirectory in webpack).value,
-      (resourceManaged in webpack).value,
-      displayOptions.value,
       (envVars in run).value,
       state.value.log,
       FileWatchService.sbt(pollInterval.value)
-    )
+    ),
+    playRunHooks <<= playRunHooks dependsOn (WebKeys.nodeModules in Plugin, WebKeys.nodeModules in Assets, WebKeys.webModules in Assets)
   )
 
   private def getWebpackScript: Def.Initialize[Task[File]] = Def.task {
@@ -93,86 +84,109 @@ object SbtPlayWebpack extends AutoPlugin {
     )
   }
 
+  private def resolveContexts: Def.Initialize[Task[Seq[File]]] = Def.task {
+    val resolveContextsScript = SbtWeb.copyResourceTo(
+      (target in Plugin).value / webpack.key.label,
+      getClass.getClassLoader.getResource("resolve-contexts.js"),
+      streams.value.cacheDirectory / "copy-resource"
+    )
+    val results = runNode(
+      baseDirectory.value,
+      resolveContextsScript,
+      args = List(config.value.absolutePath),
+      env = Map.empty,
+      log = state.value.log
+    )
+    import DefaultJsonProtocol._
+    results.headOption.toList.flatMap(_.convertTo[Seq[String]]).map(file)
+  }
+
   private def relativizedPath(base: File, file: File): String =
     relativeTo(base)(file).getOrElse(file.absolutePath)
 
-  private def runWebpackTask: Def.Initialize[Task[Seq[File]]] = Def.task {
-    val include = (includeFilter in webpack).value
-    val exclude = (excludeFilter in webpack).value
-    val context = (sourceDirectory in webpack).value
-    val inputFiles = (context ** (include && -exclude)).get.filterNot(_.isDirectory)
-    val outputDir = (resourceManaged in webpack).value
+  private def cached(cacheBaseDirectory: File, inStyle: FilesInfo.Style)(action: Set[File] => Unit): Set[File] => Unit = {
+    import Path._
+    lazy val inCache = Difference.inputs(cacheBaseDirectory / "in-cache", inStyle)
+    inputs => {
+      inCache(inputs) { inReport =>
+        if (inReport.modified.nonEmpty) action(inReport.modified)
+      }
+    }
+  }
 
-    val runUpdate = FileFunction.cached(streams.value.cacheDirectory / webpack.key.label, FilesInfo.hash) { _ =>
-      state.value.log.info(s"Webpack running by ${relativizedPath(baseDirectory.value, config.value)}")
+  private def runWebpackTask(config: Configuration): Def.Initialize[Task[Unit]] = Def.task {
+    val configFile = PlayWebpackKeys.config.value
 
-      IO.delete(outputDir)
+    val runUpdate = cached(streams.value.cacheDirectory / webpack.key.label, FilesInfo.hash) { _ =>
+      state.value.log.info(s"Webpack running by ${relativizedPath(baseDirectory.value, configFile)}")
 
-      val execution = runWebpack(
-        baseDirectory.value,
-        script.value,
-        config.value,
-        context,
-        outputDir,
-        watch = false,
-        displayOptions.value,
-        (envVars in webpack).value,
-        state.value.log
+      runNode(
+        base = baseDirectory.value,
+        script = getWebpackScript.value,
+        args = List(
+          configFile.absolutePath,
+          JsObject("watch" -> JsBoolean(false)).toString()
+        ),
+        env = (envVars in config).value,
+        log = state.value.log
       )
-
-      if (execution.exitValue() == 0)
-        outputDir.***.get.filter(_.isFile).toSet
-      else
-        throw WebpackFailureException
     }
 
-    runUpdate((config.value +: inputFiles).toSet).toSeq
+    val include = (includeFilter in webpack in config).value
+    val exclude = (excludeFilter in webpack in config).value
+    val inputFiles = contexts.value.flatMap(_.**(include && -exclude).get).filterNot(_.isDirectory)
+
+    runUpdate((configFile +: inputFiles).toSet)
   }
 
-  private def runWebpack(
-    base: File, script: File,
-    config: File, context: File, outputDir: File,
-    watch: Boolean, displayOptions: JsObject,
-    env: Map[String, String], log: Logger
-  ): Process = {
-    val options = JsObject(
-      "context" -> JsString(context.absolutePath),
-      "output" -> JsObject(
-        "path" -> JsString(outputDir.absolutePath)
-      ),
-      "watch" -> JsBoolean(watch)
-    ).toString()
-    runNode(
-      base, script.absolutePath,
-      List(config.absolutePath, options, displayOptions.toString),
-      env, log
-    )
-  }
-
-  private def runNode(base: File, script: String, args: List[String], env: Map[String, String], log: Logger): Process = {
-    def nodeInstalled: Boolean = try {
-      fork(List("node", "-v"), base, env, None)
-      true
+  private def runNode(base: File, script: File, args: List[String], env: Map[String, String], log: Logger): Seq[JsValue] = {
+    val resultBuffer = mutable.ArrayBuffer.newBuilder[JsValue]
+    val exitValue = try {
+      fork(
+        "node" :: script.absolutePath :: args,
+        base, env,
+        log.info(_),
+        log.error(_), { line => resultBuffer += JsonParser(line) }
+      ).exitValue()
     } catch {
-      case _: IOException => false
+      case e: IOException => throw NodeMissingException(e)
     }
-    if (nodeInstalled)
-      fork("node" :: script :: args, base, env, Some(log))
-    else
-      throw NodeMissingException
+    if (exitValue != 0) {
+      throw NodeExecuteFailureException(exitValue)
+    }
+    resultBuffer.result()
   }
 
-  private def fork(command: List[String], base: File, env: Map[String, String], log: Option[Logger]): Process = {
-    val io = log.map { log =>
-      new ProcessIO(
-        writeInput = BasicIO.close,
-        processOutput = BasicIO.processFully(s => log.info(s)),
-        processError = BasicIO.processFully(s => log.error(s)),
-        inheritInput = _ => false
-      )
-    }.getOrElse {
-      new ProcessIO(BasicIO.close, BasicIO.close, BasicIO.close, _ => false)
-    }
+  private def forkNode(base: File, script: File, args: List[String], env: Map[String, String], log: Logger): Process = try {
+    fork("node" :: script.absolutePath :: args, base, env, log.info(_), log.error(_), _ => ())
+  } catch {
+    case e: IOException => throw NodeMissingException(e)
+  }
+
+  private val ResultEscapeChar: Char = 0x10
+
+  private def fork(
+    command: List[String], base: File, env: Map[String, String],
+    processOutput: (String => Unit),
+    processError: (String => Unit),
+    processResult: (String => Unit)
+  ): Process = {
+    val io = new ProcessIO(
+      writeInput = BasicIO.input(false),
+      processOutput = BasicIO.processFully { line =>
+        if (line.indexOf(ResultEscapeChar) == -1) {
+          processOutput(line)
+        } else {
+          val (out, result) = line.span(_ != ResultEscapeChar)
+          if (!out.isEmpty) {
+            processOutput(out)
+          }
+          processResult(result.drop(1))
+        }
+      },
+      processError = BasicIO.processFully(processError),
+      inheritInput = BasicIO.inheritInput(false)
+    )
     if (IS_OS_WINDOWS)
       Process("cmd" :: "/c" :: command, base, env.toSeq: _*).run(io)
     else
@@ -180,20 +194,23 @@ object SbtPlayWebpack extends AutoPlugin {
   }
 
   object WebpackWatcher {
-    def apply(
-      base: File, script: File,
-      config: File, context: File, outputDir: File,
-      displayOptions: JsObject, env: Map[String, String], log: Logger,
-      fileWatchService: FileWatchService
-    ): PlayRunHook = {
+    def apply(base: File, script: File, config: File, env: Map[String, String], log: Logger, fileWatchService: FileWatchService): PlayRunHook = {
 
       object WebpackSubProcessWatcher {
         private[this] var process: Option[Process] = None
 
         def start(): Unit = {
           stop()
-          IO.delete(outputDir)
-          process = Some(runWebpack(base, script, config, context, outputDir, watch = true, displayOptions, env, log))
+          process = Some(forkNode(
+            base = base,
+            script = script,
+            args = List(
+              config.absolutePath,
+              JsObject("watch" -> JsBoolean(true)).toString()
+            ),
+            env = env,
+            log = log
+          ))
         }
 
         def stop(): Unit = for (p <- process) {

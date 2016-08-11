@@ -1,6 +1,7 @@
 {
   "private": true,
   "devDependencies": {
-    "webpack": "^1.13.1"
+    "webpack": "^1.13.1",
+    "webpack-cleanup-plugin": "^0.2.0"
   }
 }
