@@ -75,6 +75,7 @@ object SbtPlayWebpack extends AutoPlugin {
       config.value,
       (envVars in run).value,
       state.value.log,
+      (streams in webpack).value,
       FileWatchService.sbt(pollInterval.value)
     ),
     playRunHooks <<= playRunHooks dependsOn (WebKeys.nodeModules in Plugin, WebKeys.nodeModules in Assets, WebKeys.webModules in Assets)
@@ -97,9 +98,9 @@ object SbtPlayWebpack extends AutoPlugin {
     val results = runNode(
       baseDirectory.value,
       resolveContextsScript,
-      args = List(PlayWebpackKeys.config.value.absolutePath),
-      env = (envVars in config).value,
-      log = state.value.log
+      List(PlayWebpackKeys.config.value.absolutePath),
+      (envVars in config).value,
+      state.value.log
     )
     import DefaultJsonProtocol._
     results.headOption.toList.flatMap(_.convertTo[Seq[String]]).map(file)
@@ -126,14 +127,14 @@ object SbtPlayWebpack extends AutoPlugin {
       state.value.log.info(s"Webpack running by ${relativizedPath(baseDirectory.value, configFile)}")
 
       runNode(
-        base = baseDirectory.value,
-        script = getWebpackScript.value,
-        args = List(
+        baseDirectory.value,
+        getWebpackScript.value,
+        List(
           configFile.absolutePath,
           JsObject("watch" -> JsBoolean(false)).toString()
         ),
-        env = (envVars in config).value,
-        log = state.value.log
+        (envVars in config).value,
+        state.value.log
       )
 
       doClean(cacheDir.getParentFile.*(DirectoryFilter).get, Seq(cacheDir))
@@ -153,7 +154,8 @@ object SbtPlayWebpack extends AutoPlugin {
         "node" :: script.absolutePath :: args,
         base, env,
         log.info(_),
-        log.error(_), { line => resultBuffer += JsonParser(line) }
+        log.error(_),
+        line => resultBuffer += JsonParser(line)
       ).exitValue()
     } catch {
       case e: IOException => throw NodeMissingException(e)
@@ -164,11 +166,12 @@ object SbtPlayWebpack extends AutoPlugin {
     resultBuffer.result()
   }
 
-  private def forkNode(base: File, script: File, args: List[String], env: Map[String, String], log: Logger): Process = try {
-    fork("node" :: script.absolutePath :: args, base, env, log.info(_), log.error(_), _ => ())
-  } catch {
-    case e: IOException => throw NodeMissingException(e)
-  }
+  private def forkNode(base: File, script: File, args: List[String], env: Map[String, String], log: Logger): Process =
+    try {
+      fork("node" :: script.absolutePath :: args, base, env, log.info(_), log.error(_), _ => ())
+    } catch {
+      case e: IOException => throw NodeMissingException(e)
+    }
 
   private val ResultEscapeChar: Char = 0x10
 
@@ -201,27 +204,27 @@ object SbtPlayWebpack extends AutoPlugin {
   }
 
   object WebpackWatcher {
-    def apply(base: File, script: File, config: File, env: Map[String, String], log: Logger, fileWatchService: FileWatchService): PlayRunHook = {
+    def apply(
+      base: File, script: File, config: File, env: Map[String, String],
+      log: Logger, webpackStreams: TaskStreams, fileWatchService: FileWatchService
+    ): PlayRunHook = {
 
       object WebpackSubProcessWatcher {
         private[this] var process: Option[Process] = None
 
         def start(): Unit = {
+          IO.delete(webpackStreams.cacheDirectory / "run")
+
           stop()
-          process = Some(forkNode(
-            base = base,
-            script = script,
-            args = List(
-              config.absolutePath,
-              JsObject("watch" -> JsBoolean(true)).toString()
-            ),
-            env = env,
-            log = log
-          ))
+
+          process = Some(forkNode(base, script, List(
+            config.absolutePath,
+            JsObject("watch" -> JsBoolean(true)).toString()
+          ), env, log))
         }
 
-        def stop(): Unit = for (p <- process) {
-          p.destroy()
+        def stop(): Unit = {
+          process.foreach(_.destroy())
           process = None
         }
       }
