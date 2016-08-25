@@ -58,11 +58,20 @@ object SbtPlayWebpack extends AutoPlugin {
     contexts in TestAssets <<= resolveContexts(TestAssets),
     contexts <<= contexts in Assets,
 
-    webpack in Assets <<= runWebpack(Assets) dependsOn (WebKeys.nodeModules in Plugin, WebKeys.nodeModules in Assets, WebKeys.webModules in Assets),
-    webpack in TestAssets <<= runWebpack(TestAssets) dependsOn (WebKeys.nodeModules in Plugin, WebKeys.nodeModules in Assets, WebKeys.webModules in Assets),
+    webpack in Assets <<= runWebpack(Assets) dependsOn (
+      WebKeys.nodeModules in Plugin,
+      WebKeys.nodeModules in Assets,
+      WebKeys.webModules in Assets
+    ),
+    webpack in TestAssets <<= runWebpack(TestAssets) dependsOn (
+      WebKeys.nodeModules in Plugin,
+      WebKeys.nodeModules in Assets,
+      WebKeys.webModules in Assets
+    ),
     webpack <<= webpack in Assets,
 
     WebKeys.pipeline <<= WebKeys.pipeline dependsOn (webpack in Assets),
+    packageBin in Universal <<= (packageBin in Universal) dependsOn (webpack in Assets),
     stage in Universal <<= (stage in Universal) dependsOn (webpack in Assets),
     stage in Docker <<= (stage in Docker) dependsOn (webpack in Assets),
     dist in Universal <<= (dist in Universal) dependsOn (webpack in Assets),
@@ -78,7 +87,11 @@ object SbtPlayWebpack extends AutoPlugin {
       (streams in webpack).value,
       FileWatchService.sbt(pollInterval.value)
     ),
-    playRunHooks <<= playRunHooks dependsOn (WebKeys.nodeModules in Plugin, WebKeys.nodeModules in Assets, WebKeys.webModules in Assets)
+    playRunHooks <<= playRunHooks dependsOn (
+      WebKeys.nodeModules in Plugin,
+      WebKeys.nodeModules in Assets,
+      WebKeys.webModules in Assets
+    )
   )
 
   private def getWebpackScript: Def.Initialize[Task[File]] = Def.task {

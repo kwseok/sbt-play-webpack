@@ -7,7 +7,7 @@ Add plugin
 Add the plugin to `project/plugins.sbt`.
 
 ```scala
-addSbtPlugin("io.teamscala.sbt" % "sbt-play-webpack" % "1.0.4")
+addSbtPlugin("io.teamscala.sbt" % "sbt-play-webpack" % "1.0.5")
 ```
 
 Your project's build file also needs to enable play sbt plugins. For example with build.sbt:
