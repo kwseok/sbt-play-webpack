@@ -1,6 +1,6 @@
 sbtPlugin := true
 
-organization := "io.teamscala.sbt"
+organization := "com.github.stonexx.sbt"
 
 name := "sbt-play-webpack"
 
@@ -13,8 +13,8 @@ resolvers ++= Seq(
 
 dependencyOverrides += "org.webjars" % "npm" % "3.9.3"
 
-libraryDependencies += "org.webjars.npm" % "lodash" % "4.14.1"
+libraryDependencies += "org.webjars.npm" % "lodash" % "4.15.0"
 
-addSbtPlugin("com.typesafe.play" % "sbt-plugin" % sys.props.getOrElse("play.version", "2.5.4"))
+addSbtPlugin("com.typesafe.play" % "sbt-plugin" % sys.props.getOrElse("play.version", "2.5.8"))
 
 licenses += ("Apache-2.0", url("http://www.apache.org/licenses/LICENSE-2.0.html"))

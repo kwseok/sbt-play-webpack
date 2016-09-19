@@ -1,4 +1,4 @@
-package io.teamscala.sbt.play.webpack
+package com.github.stonexx.sbt.play.webpack
 
 import java.io.IOException
 import java.net.InetSocketAddress
@@ -144,7 +144,7 @@ object SbtPlayWebpack extends AutoPlugin {
         getWebpackScript.value,
         List(
           configFile.absolutePath,
-          JsObject("watch" -> JsBoolean(false)).toString()
+          JsObject("watch" -> JsBoolean(false)).toString
         ),
         (envVars in config).value,
         state.value.log
