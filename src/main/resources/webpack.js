@@ -14,7 +14,7 @@
         return _.isUndefined(src) ? obj : src;
     });
 
-    defaults(primaryOptions, JSON.parse(process.argv[3]));
+    defaults(primaryOptions, JSON.parse(decodeURIComponent(process.argv[3] || '{}')));
 
     const outputOptions = defaults({
         colors: true,

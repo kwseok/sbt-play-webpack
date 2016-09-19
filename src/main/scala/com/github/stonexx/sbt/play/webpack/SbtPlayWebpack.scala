@@ -1,13 +1,14 @@
 package com.github.stonexx.sbt.play.webpack
 
 import java.io.IOException
-import java.net.InetSocketAddress
+import java.net.{InetSocketAddress, URLEncoder}
 
 import com.typesafe.jse.LocalEngine
 import com.typesafe.sbt.packager.universal.UniversalPlugin.autoImport.{Universal, stage, dist}
 import com.typesafe.sbt.packager.docker.DockerPlugin.autoImport.Docker
 import com.typesafe.sbt.web.SbtWeb
 import com.typesafe.sbt.web.SbtWeb.autoImport.{WebKeys, _}
+import org.apache.commons.compress.utils.CharsetNames.UTF_8
 import org.apache.commons.lang3.SystemUtils.IS_OS_WINDOWS
 import play.runsupport.{FileWatchService, FileWatcher}
 import play.sbt.PlayImport.PlayKeys.playRunHooks
@@ -144,7 +145,7 @@ object SbtPlayWebpack extends AutoPlugin {
         getWebpackScript.value,
         List(
           configFile.absolutePath,
-          JsObject("watch" -> JsBoolean(false)).toString
+          URLEncoder.encode(JsObject("watch" -> JsBoolean(false)).toString, UTF_8)
         ),
         (envVars in config).value,
         state.value.log
@@ -232,7 +233,7 @@ object SbtPlayWebpack extends AutoPlugin {
 
           process = Some(forkNode(base, script, List(
             config.absolutePath,
-            JsObject("watch" -> JsBoolean(true)).toString()
+            URLEncoder.encode(JsObject("watch" -> JsBoolean(true)).toString, UTF_8)
           ), env, log))
         }
 
