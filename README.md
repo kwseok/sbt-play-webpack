@@ -1,3 +1,9 @@
+# DEPRECATED
+
+This plugin has been deprecated. Use [sbt-webpack](https://github.com/stonexx/sbt-webpack) instead.
+
+---
+
 # sbt-play-webpack
 An play sbt plugin for the webpack module bundler.
 
